@@ -3,13 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Gráfico Binance + SuperDOM + Iceberg & Retirada</title>
+  <title>Gráfico Binance + SuperDOM + Informações</title>
   <style>
     html, body {
-      margin: 0; padding: 0; height: 100%; font-family: monospace; background: #111; color: #eee;
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: monospace;
+      background: #111;
+      color: #eee;
     }
     #controls {
-      padding: 6px; background: #222; font-size: 14px;
+      padding: 6px;
+      background: #222;
+      font-size: 14px;
     }
     #chartWrapper {
       position: relative;
@@ -26,7 +33,8 @@
     }
     #domOverlay {
       position: absolute;
-      top: 0; right: 0;
+      top: 0;
+      right: 0;
       width: 80px;
       background: rgba(0,0,0,0.4);
       font-size: 10px;
@@ -68,16 +76,6 @@
       font-size: 11px;
       z-index: 4;
     }
-    .iceberg-line {
-      stroke: yellow;
-      stroke-width: 2;
-      stroke-dasharray: 6,4;
-    }
-    .retirada-line {
-      stroke: magenta;
-      stroke-width: 2;
-      stroke-dasharray: 4,4;
-    }
   </style>
 </head>
 <body>
@@ -112,13 +110,10 @@
     let deltaMap = {};
     let candles = [];
     let zoom = 1;
+    let wsKline;
 
-    // Para detecção iceberg e retirada rápida
-    const ICEBERG_VOLUME_THRESHOLD = 50; // Ajuste conforme ativo
-    const RETIRADA_VOLUME_DROP = 30; // Queda brusca para retirada rápida
-    let lastDepth = { bids: [], asks: [] };
-    let icebergLines = [];
-    let retiradaLines = [];
+    // URL da sua API (já configurada)
+    const apiUrl = "https://upgraded-acorn-74r6jq7g7vvcpp4j-3000.app.github.dev/enviar-dados";
 
     function resizeCanvas() {
       canvas.width = canvas.clientWidth;
@@ -131,9 +126,9 @@
       return canvas.height / 2 + (price - p) * zoom * 5;
     }
 
-    function drawLine(y, color, text, dash = [4,4]) {
+    function drawLine(y, color, text) {
       ctx.strokeStyle = color;
-      ctx.setLineDash(dash);
+      ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(canvas.width, y);
@@ -147,7 +142,18 @@
       lbl.style.left = '5px';
       lbl.style.color = color;
       canvas.parentElement.appendChild(lbl);
-      setTimeout(() => lbl.remove(), 12000);
+      setTimeout(() => lbl.remove(), 10000);
+    }
+
+    function enviarDadosParaAPI(price, tp, target_direction) {
+      fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ price, tp, target_direction })
+      })
+      .then(response => response.json())
+      .then(data => console.log('Dados enviados para API:', data))
+      .catch(err => console.error('Erro enviando dados para API:', err));
     }
 
     function render() {
@@ -171,7 +177,6 @@
         ctx.fillText(c.delta.toFixed(1), x, Math.min(oY, cY) - 4);
       });
 
-      // Delta alvo
       let maxDelta = 0;
       let targetPrice = 0;
       for (let p in deltaMap) {
@@ -181,19 +186,11 @@
         }
       }
       if (targetPrice) {
-        drawLine(yPos(targetPrice), maxDelta > 0 ? 'cyan' : 'orange', `Alvo Delta: ${targetPrice}`, [6,3]);
+        drawLine(yPos(targetPrice), maxDelta > 0 ? 'cyan' : 'orange', `Alvo Delta: ${targetPrice}`);
         deltaTargetSpan.innerText = `${targetPrice} (${maxDelta > 0 ? 'Buy' : 'Sell'})`;
+
+        enviarDadosParaAPI(price, targetPrice, maxDelta > 0 ? 'buy' : 'sell');
       }
-
-      // Linhas iceberg
-      icebergLines.forEach(p => {
-        drawLine(yPos(p), 'yellow', `Iceberg: ${p.toFixed(2)}`, [10,5]);
-      });
-
-      // Linhas retirada rápida
-      retiradaLines.forEach(p => {
-        drawLine(yPos(p), 'magenta', `Retirada: ${p.toFixed(2)}`, [4,4]);
-      });
 
       zoomLevelSpan.innerText = zoom.toFixed(2);
       currentPriceSpan.innerText = price.toFixed(2);
@@ -213,46 +210,10 @@
       });
     }
 
-    function detectIcebergAndRetirada(currentDepth) {
-      // Iceberg: volumes muito grandes que aparecem
-      icebergLines = [];
-      retiradaLines = [];
-
-      // Analisar bids e asks para iceberg (volume acima do limite)
-      currentDepth.bids.forEach(([price, vol]) => {
-        if (+vol > ICEBERG_VOLUME_THRESHOLD) {
-          icebergLines.push(+price);
-        }
-      });
-      currentDepth.asks.forEach(([price, vol]) => {
-        if (+vol > ICEBERG_VOLUME_THRESHOLD) {
-          icebergLines.push(+price);
-        }
-      });
-
-      // Retirada rápida: detecta quedas bruscas no volume de preço em relação à última atualização
-      if (lastDepth.bids.length && lastDepth.asks.length) {
-        currentDepth.bids.forEach(([price, vol]) => {
-          let lastVol = lastDepth.bids.find(b => b[0] === price);
-          if (lastVol && lastVol[1] - vol > RETIRADA_VOLUME_DROP) {
-            retiradaLines.push(+price);
-          }
-        });
-        currentDepth.asks.forEach(([price, vol]) => {
-          let lastVol = lastDepth.asks.find(a => a[0] === price);
-          if (lastVol && lastVol[1] - vol > RETIRADA_VOLUME_DROP) {
-            retiradaLines.push(+price);
-          }
-        });
-      }
-
-      lastDepth = currentDepth;
-    }
-
     function startKlineSocket(interval) {
-      if (window.wsKline) window.wsKline.close();
-      window.wsKline = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@kline_${interval}`);
-      window.wsKline.onmessage = e => {
+      if (wsKline) wsKline.close();
+      wsKline = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@kline_${interval}`);
+      wsKline.onmessage = e => {
         const k = JSON.parse(e.data).k;
         const delta = deltaMap[k.c] || 0;
         candles.push({ o: +k.o, h: +k.h, l: +k.l, c: +k.c, delta });
@@ -270,7 +231,6 @@
     const wsDepth = new WebSocket('wss://fstream.binance.com/ws/btcusdt@depth20@100ms');
     wsDepth.onmessage = e => {
       const d = JSON.parse(e.data);
-      detectIcebergAndRetirada({ bids: d.bids, asks: d.asks });
       updateDOMOverlay(d.bids, d.asks);
       render();
     };
