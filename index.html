@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SuperDOM + Gráfico Binance</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; font-family: monospace; background: #111; color: #eee;
+    -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; user-select:none;
+  }
+  #container {
+    position: relative;
+    width: 100vw; height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: row;
+  }
+  #chartCanvas {
+    flex: 1;
+    background: #000;
+    touch-action: pinch-zoom;
+  }
+  #superDOM {
+    width: 150px;
+    background: #111;
+    border-left: 1px solid #333;
+    overflow-y: auto;
+    font-size: 12px;
+    padding: 5px;
+  }
+  #infoPanel {
+    position: absolute;
+    top: 10px; left: 10px;
+    background: rgba(0,0,0,0.7);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    max-width: 300px;
+    z-index: 10;
+  }
+  .targetLine {
+    position: absolute;
+    left: 0; right: 0; height: 2px; z-index: 5;
+  }
+  .targetBuy { background: limegreen; }
+  .targetSell { background: orange; }
+  .targetDelta { background: deepskyblue; }
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="chartCanvas"></canvas>
+  <div id="superDOM">
+    <h3>SuperDOM</h3>
+    <div id="buyOrders"></div>
+    <div id="sellOrders"></div>
+  </div>
+  <div id="infoPanel">
+    <div>Preço Atual: <span id="priceNow">0</span></div>
+    <div>Delta: <span id="deltaValue">0</span></div>
+    <div>Alvo TP (Delta): <span id="targetPrice">0</span></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('chartCanvas');
+  const ctx = canvas.getContext('2d');
+  const buyOrdersDiv = document.getElementById('buyOrders');
+  const sellOrdersDiv = document.getElementById('sellOrders');
+  const priceNowSpan = document.getElementById('priceNow');
+  const deltaValueSpan = document.getElementById('deltaValue');
+  const targetPriceSpan = document.getElementById('targetPrice');
+
+  // Ajusta canvas para full size do container
+  function resize() {
+    canvas.width = canvas.clientWidth * window.devicePixelRatio;
+    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Variáveis para simulação (substituir com WebSocket Binance real)
+  let price = 50000;
+  let delta = 0;
+  let targetDeltaPrice = price + 50;
+  let buyOrders = [];
+  let sellOrders = [];
+
+  // Gera ordens simuladas para SuperDOM
+  function generateOrders() {
+    buyOrders = [];
+    sellOrders = [];
+    for(let i=0; i<15; i++) {
+      buyOrders.push({price: price - i*10, volume: Math.floor(Math.random()*100 + 1)});
+      sellOrders.push({price: price + i*10, volume: Math.floor(Math.random()*100 + 1)});
+    }
+  }
+  generateOrders();
+
+  // Atualiza painel SuperDOM
+  function updateSuperDOM() {
+    buyOrdersDiv.innerHTML = '<b>Ordens Compra (Bid)</b><br>';
+    sellOrdersDiv.innerHTML = '<b>Ordens Venda (Ask)</b><br>';
+
+    buyOrders.forEach(o => {
+      buyOrdersDiv.innerHTML += `R$ ${o.price.toFixed(2)} - ${o.volume}<br>`;
+    });
+    sellOrders.forEach(o => {
+      sellOrdersDiv.innerHTML += `R$ ${o.price.toFixed(2)} - ${o.volume}<br>`;
+    });
+  }
+
+  // Função para plotar candles vazios (bordas) com delta dentro
+  function drawCandles() {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    ctx.clearRect(0,0,width,height);
+
+    // Simula 30 candles
+    const candleCount = 30;
+    const candleWidth = width / candleCount;
+    const maxPrice = price + 200;
+    const minPrice = price - 200;
+    const priceRange = maxPrice - minPrice;
+
+    for(let i=0; i<candleCount; i++) {
+      // Simula dados candle
+      let open = price - 100 + i * 5 + (Math.random()-0.5)*10;
+      let close = open + (Math.random()-0.5)*20;
+      let high = Math.max(open, close) + Math.random()*10;
+      let low = Math.min(open, close) - Math.random()*10;
+
+      // Posiciona y no canvas
+      const yOpen = height * (1 - (open - minPrice) / priceRange);
+      const yClose = height * (1 - (close - minPrice) / priceRange);
+      const yHigh = height * (1 - (high - minPrice) / priceRange);
+      const yLow = height * (1 - (low - minPrice) / priceRange);
+
+      // Cor da borda e preenchimento vazio
+      ctx.strokeStyle = close >= open ? 'limegreen' : 'red';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      // Linha do corpo
+      ctx.moveTo(i*candleWidth + candleWidth/2, yOpen);
+      ctx.lineTo(i*candleWidth + candleWidth/2, yClose);
+      ctx.stroke();
+
+      // Linha do pavio
+      ctx.beginPath();
+      ctx.moveTo(i*candleWidth + candleWidth/2, yHigh);
+      ctx.lineTo(i*candleWidth + candleWidth/2, yLow);
+      ctx.stroke();
+
+      // Escreve delta no candle
+      ctx.fillStyle = '#eee';
+      ctx.font = '10px monospace';
+      const deltaSimulado = Math.floor((Math.random() - 0.5) * 1000);
+      ctx.fillText(deltaSimulado, i*candleWidth + 5, (yOpen + yClose)/2);
+    }
+
+    // Linha preço atual turquesa tracejada
+    const yPrice = height * (1 - (price - minPrice) / priceRange);
+    ctx.strokeStyle = 'deepskyblue';
+    ctx.setLineDash([5,5]);
+    ctx.beginPath();
+    ctx.moveTo(0, yPrice);
+    ctx.lineTo(width, yPrice);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Linha alvo delta (TP móvel) azul sólida
+    const yTarget = height * (1 - (targetDeltaPrice - minPrice) / priceRange);
+    ctx.strokeStyle = 'blue';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, yTarget);
+    ctx.lineTo(width, yTarget);
+    ctx.stroke();
+  }
+
+  // Atualiza painel de infos
+  function updateInfo() {
+    priceNowSpan.textContent = price.toFixed(2);
+    deltaValueSpan.textContent = delta.toFixed(2);
+    targetPriceSpan.textContent = targetDeltaPrice.toFixed(2);
+  }
+
+  // Simula atualização de preço e delta
+  function simulateUpdates() {
+    // Preço oscila
+    price += (Math.random()-0.5)*20;
+    delta = (Math.random()-0.5)*500;
+
+    // Atualiza alvo delta dinamicamente (exemplo)
+    targetDeltaPrice = price + delta * 0.1;
+
+    // Atualiza ordens
+    generateOrders();
+    updateSuperDOM();
+
+    // Atualiza gráfico e painel
+    drawCandles();
+    updateInfo();
+  }
+
+  // Loop contínuo para simular dados em tempo real
+  setInterval(simulateUpdates, 1500);
+
+  // Inicializa na tela
+  updateSuperDOM();
+  drawCandles();
+  updateInfo();
+
+})();
+</script>
+</body>
+</html>
