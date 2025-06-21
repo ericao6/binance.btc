@@ -1,222 +1,289 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SuperDOM + Gráfico Binance</title>
-<style>
-  html, body {
-    margin: 0; padding: 0; height: 100%; font-family: monospace; background: #111; color: #eee;
-    -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; user-select:none;
-  }
-  #container {
-    position: relative;
-    width: 100vw; height: 100vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: row;
-  }
-  #chartCanvas {
-    flex: 1;
-    background: #000;
-    touch-action: pinch-zoom;
-  }
-  #superDOM {
-    width: 150px;
-    background: #111;
-    border-left: 1px solid #333;
-    overflow-y: auto;
-    font-size: 12px;
-    padding: 5px;
-  }
-  #infoPanel {
-    position: absolute;
-    top: 10px; left: 10px;
-    background: rgba(0,0,0,0.7);
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 12px;
-    max-width: 300px;
-    z-index: 10;
-  }
-  .targetLine {
-    position: absolute;
-    left: 0; right: 0; height: 2px; z-index: 5;
-  }
-  .targetBuy { background: limegreen; }
-  .targetSell { background: orange; }
-  .targetDelta { background: deepskyblue; }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Gráfico Binance + SuperDOM + Iceberg & Retirada</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%; font-family: monospace; background: #111; color: #eee;
+    }
+    #controls {
+      padding: 6px; background: #222; font-size: 14px;
+    }
+    #chartWrapper {
+      position: relative;
+      width: 100vw;
+      height: calc(100vh - 35px);
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      touch-action: pinch-zoom;
+    }
+    #domOverlay {
+      position: absolute;
+      top: 0; right: 0;
+      width: 80px;
+      background: rgba(0,0,0,0.4);
+      font-size: 10px;
+      overflow-y: auto;
+      height: 100%;
+      z-index: 3;
+    }
+    .dom-line {
+      position: absolute;
+      right: 0;
+      width: 100%;
+      padding: 1px 2px;
+      text-align: right;
+    }
+    .bid-line {
+      background: rgba(0,255,0,0.1);
+    }
+    .ask-line {
+      background: rgba(255,0,0,0.1);
+    }
+    .line-label {
+      position: absolute;
+      font-size: 11px;
+      background: #000;
+      padding: 1px 3px;
+      color: white;
+      border-radius: 3px;
+      z-index: 4;
+      white-space: nowrap;
+    }
+    #infoPanel {
+      position: absolute;
+      top: 5px;
+      left: 5px;
+      background: rgba(0,0,0,0.65);
+      border: 1px solid #444;
+      padding: 6px 10px;
+      border-radius: 5px;
+      font-size: 11px;
+      z-index: 4;
+    }
+    .iceberg-line {
+      stroke: yellow;
+      stroke-width: 2;
+      stroke-dasharray: 6,4;
+    }
+    .retirada-line {
+      stroke: magenta;
+      stroke-width: 2;
+      stroke-dasharray: 4,4;
+    }
+  </style>
 </head>
 <body>
-<div id="container">
-  <canvas id="chartCanvas"></canvas>
-  <div id="superDOM">
-    <h3>SuperDOM</h3>
-    <div id="buyOrders"></div>
-    <div id="sellOrders"></div>
+  <div id="controls">
+    Timeframe:
+    <select id="timeframe">
+      <option value="1m">1m</option>
+      <option value="5m">5m</option>
+      <option value="15m">15m</option>
+    </select>
   </div>
-  <div id="infoPanel">
-    <div>Preço Atual: <span id="priceNow">0</span></div>
-    <div>Delta: <span id="deltaValue">0</span></div>
-    <div>Alvo TP (Delta): <span id="targetPrice">0</span></div>
+  <div id="chartWrapper">
+    <canvas id="canvas"></canvas>
+    <div id="domOverlay"></div>
+    <div id="infoPanel">
+      <div>Preço Atual: <span id="currentPrice">-</span></div>
+      <div>Maior Delta: <span id="deltaTarget">-</span></div>
+      <div>Zoom: <span id="zoomLevel">1.00</span></div>
+    </div>
   </div>
-</div>
 
-<script>
-(() => {
-  const canvas = document.getElementById('chartCanvas');
-  const ctx = canvas.getContext('2d');
-  const buyOrdersDiv = document.getElementById('buyOrders');
-  const sellOrdersDiv = document.getElementById('sellOrders');
-  const priceNowSpan = document.getElementById('priceNow');
-  const deltaValueSpan = document.getElementById('deltaValue');
-  const targetPriceSpan = document.getElementById('targetPrice');
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const domOverlay = document.getElementById('domOverlay');
+    const currentPriceSpan = document.getElementById('currentPrice');
+    const deltaTargetSpan = document.getElementById('deltaTarget');
+    const zoomLevelSpan = document.getElementById('zoomLevel');
+    const timeframeSelector = document.getElementById('timeframe');
 
-  // Ajusta canvas para full size do container
-  function resize() {
-    canvas.width = canvas.clientWidth * window.devicePixelRatio;
-    canvas.height = canvas.clientHeight * window.devicePixelRatio;
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  }
-  window.addEventListener('resize', resize);
-  resize();
+    let price = 0;
+    let deltaMap = {};
+    let candles = [];
+    let zoom = 1;
 
-  // Variáveis para simulação (substituir com WebSocket Binance real)
-  let price = 50000;
-  let delta = 0;
-  let targetDeltaPrice = price + 50;
-  let buyOrders = [];
-  let sellOrders = [];
+    // Para detecção iceberg e retirada rápida
+    const ICEBERG_VOLUME_THRESHOLD = 50; // Ajuste conforme ativo
+    const RETIRADA_VOLUME_DROP = 30; // Queda brusca para retirada rápida
+    let lastDepth = { bids: [], asks: [] };
+    let icebergLines = [];
+    let retiradaLines = [];
 
-  // Gera ordens simuladas para SuperDOM
-  function generateOrders() {
-    buyOrders = [];
-    sellOrders = [];
-    for(let i=0; i<15; i++) {
-      buyOrders.push({price: price - i*10, volume: Math.floor(Math.random()*100 + 1)});
-      sellOrders.push({price: price + i*10, volume: Math.floor(Math.random()*100 + 1)});
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
     }
-  }
-  generateOrders();
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
 
-  // Atualiza painel SuperDOM
-  function updateSuperDOM() {
-    buyOrdersDiv.innerHTML = '<b>Ordens Compra (Bid)</b><br>';
-    sellOrdersDiv.innerHTML = '<b>Ordens Venda (Ask)</b><br>';
-
-    buyOrders.forEach(o => {
-      buyOrdersDiv.innerHTML += `R$ ${o.price.toFixed(2)} - ${o.volume}<br>`;
-    });
-    sellOrders.forEach(o => {
-      sellOrdersDiv.innerHTML += `R$ ${o.price.toFixed(2)} - ${o.volume}<br>`;
-    });
-  }
-
-  // Função para plotar candles vazios (bordas) com delta dentro
-  function drawCandles() {
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    ctx.clearRect(0,0,width,height);
-
-    // Simula 30 candles
-    const candleCount = 30;
-    const candleWidth = width / candleCount;
-    const maxPrice = price + 200;
-    const minPrice = price - 200;
-    const priceRange = maxPrice - minPrice;
-
-    for(let i=0; i<candleCount; i++) {
-      // Simula dados candle
-      let open = price - 100 + i * 5 + (Math.random()-0.5)*10;
-      let close = open + (Math.random()-0.5)*20;
-      let high = Math.max(open, close) + Math.random()*10;
-      let low = Math.min(open, close) - Math.random()*10;
-
-      // Posiciona y no canvas
-      const yOpen = height * (1 - (open - minPrice) / priceRange);
-      const yClose = height * (1 - (close - minPrice) / priceRange);
-      const yHigh = height * (1 - (high - minPrice) / priceRange);
-      const yLow = height * (1 - (low - minPrice) / priceRange);
-
-      // Cor da borda e preenchimento vazio
-      ctx.strokeStyle = close >= open ? 'limegreen' : 'red';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      // Linha do corpo
-      ctx.moveTo(i*candleWidth + candleWidth/2, yOpen);
-      ctx.lineTo(i*candleWidth + candleWidth/2, yClose);
-      ctx.stroke();
-
-      // Linha do pavio
-      ctx.beginPath();
-      ctx.moveTo(i*candleWidth + candleWidth/2, yHigh);
-      ctx.lineTo(i*candleWidth + candleWidth/2, yLow);
-      ctx.stroke();
-
-      // Escreve delta no candle
-      ctx.fillStyle = '#eee';
-      ctx.font = '10px monospace';
-      const deltaSimulado = Math.floor((Math.random() - 0.5) * 1000);
-      ctx.fillText(deltaSimulado, i*candleWidth + 5, (yOpen + yClose)/2);
+    function yPos(p) {
+      return canvas.height / 2 + (price - p) * zoom * 5;
     }
 
-    // Linha preço atual turquesa tracejada
-    const yPrice = height * (1 - (price - minPrice) / priceRange);
-    ctx.strokeStyle = 'deepskyblue';
-    ctx.setLineDash([5,5]);
-    ctx.beginPath();
-    ctx.moveTo(0, yPrice);
-    ctx.lineTo(width, yPrice);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    function drawLine(y, color, text, dash = [4,4]) {
+      ctx.strokeStyle = color;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-    // Linha alvo delta (TP móvel) azul sólida
-    const yTarget = height * (1 - (targetDeltaPrice - minPrice) / priceRange);
-    ctx.strokeStyle = 'blue';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(0, yTarget);
-    ctx.lineTo(width, yTarget);
-    ctx.stroke();
-  }
+      const lbl = document.createElement('div');
+      lbl.className = 'line-label';
+      lbl.innerText = text;
+      lbl.style.top = `${y}px`;
+      lbl.style.left = '5px';
+      lbl.style.color = color;
+      canvas.parentElement.appendChild(lbl);
+      setTimeout(() => lbl.remove(), 12000);
+    }
 
-  // Atualiza painel de infos
-  function updateInfo() {
-    priceNowSpan.textContent = price.toFixed(2);
-    deltaValueSpan.textContent = delta.toFixed(2);
-    targetPriceSpan.textContent = targetDeltaPrice.toFixed(2);
-  }
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawLine(yPos(price), 'deepskyblue', `Preço Atual: ${price.toFixed(2)}`);
 
-  // Simula atualização de preço e delta
-  function simulateUpdates() {
-    // Preço oscila
-    price += (Math.random()-0.5)*20;
-    delta = (Math.random()-0.5)*500;
+      candles.forEach((c, i) => {
+        const x = canvas.width - (candles.length - i) * 8;
+        const oY = yPos(c.o);
+        const cY = yPos(c.c);
+        const hY = yPos(c.h);
+        const lY = yPos(c.l);
+        ctx.strokeStyle = c.o > c.c ? 'red' : 'lime';
+        ctx.beginPath();
+        ctx.moveTo(x + 3, hY);
+        ctx.lineTo(x + 3, lY);
+        ctx.stroke();
+        ctx.strokeRect(x, Math.min(oY, cY), 6, Math.abs(oY - cY));
+        ctx.fillStyle = '#fff';
+        ctx.font = '8px monospace';
+        ctx.fillText(c.delta.toFixed(1), x, Math.min(oY, cY) - 4);
+      });
 
-    // Atualiza alvo delta dinamicamente (exemplo)
-    targetDeltaPrice = price + delta * 0.1;
+      // Delta alvo
+      let maxDelta = 0;
+      let targetPrice = 0;
+      for (let p in deltaMap) {
+        if (Math.abs(deltaMap[p]) > Math.abs(maxDelta)) {
+          maxDelta = deltaMap[p];
+          targetPrice = parseFloat(p);
+        }
+      }
+      if (targetPrice) {
+        drawLine(yPos(targetPrice), maxDelta > 0 ? 'cyan' : 'orange', `Alvo Delta: ${targetPrice}`, [6,3]);
+        deltaTargetSpan.innerText = `${targetPrice} (${maxDelta > 0 ? 'Buy' : 'Sell'})`;
+      }
 
-    // Atualiza ordens
-    generateOrders();
-    updateSuperDOM();
+      // Linhas iceberg
+      icebergLines.forEach(p => {
+        drawLine(yPos(p), 'yellow', `Iceberg: ${p.toFixed(2)}`, [10,5]);
+      });
 
-    // Atualiza gráfico e painel
-    drawCandles();
-    updateInfo();
-  }
+      // Linhas retirada rápida
+      retiradaLines.forEach(p => {
+        drawLine(yPos(p), 'magenta', `Retirada: ${p.toFixed(2)}`, [4,4]);
+      });
 
-  // Loop contínuo para simular dados em tempo real
-  setInterval(simulateUpdates, 1500);
+      zoomLevelSpan.innerText = zoom.toFixed(2);
+      currentPriceSpan.innerText = price.toFixed(2);
+    }
 
-  // Inicializa na tela
-  updateSuperDOM();
-  drawCandles();
-  updateInfo();
+    function updateDOMOverlay(bids, asks) {
+      domOverlay.innerHTML = '';
+      const all = [...bids.map(b => [...b, 'bid']), ...asks.map(a => [...a, 'ask'])];
+      all.sort((a, b) => +b[0] - +a[0]).forEach(([p, v, type]) => {
+        const y = yPos(+p);
+        if (y < 0 || y > canvas.height) return;
+        const div = document.createElement('div');
+        div.className = `dom-line ${type === 'bid' ? 'bid-line' : 'ask-line'}`;
+        div.style.top = `${y}px`;
+        div.innerText = `${parseFloat(p).toFixed(2)}\n${parseFloat(v).toFixed(2)}`;
+        domOverlay.appendChild(div);
+      });
+    }
 
-})();
-</script>
+    function detectIcebergAndRetirada(currentDepth) {
+      // Iceberg: volumes muito grandes que aparecem
+      icebergLines = [];
+      retiradaLines = [];
+
+      // Analisar bids e asks para iceberg (volume acima do limite)
+      currentDepth.bids.forEach(([price, vol]) => {
+        if (+vol > ICEBERG_VOLUME_THRESHOLD) {
+          icebergLines.push(+price);
+        }
+      });
+      currentDepth.asks.forEach(([price, vol]) => {
+        if (+vol > ICEBERG_VOLUME_THRESHOLD) {
+          icebergLines.push(+price);
+        }
+      });
+
+      // Retirada rápida: detecta quedas bruscas no volume de preço em relação à última atualização
+      if (lastDepth.bids.length && lastDepth.asks.length) {
+        currentDepth.bids.forEach(([price, vol]) => {
+          let lastVol = lastDepth.bids.find(b => b[0] === price);
+          if (lastVol && lastVol[1] - vol > RETIRADA_VOLUME_DROP) {
+            retiradaLines.push(+price);
+          }
+        });
+        currentDepth.asks.forEach(([price, vol]) => {
+          let lastVol = lastDepth.asks.find(a => a[0] === price);
+          if (lastVol && lastVol[1] - vol > RETIRADA_VOLUME_DROP) {
+            retiradaLines.push(+price);
+          }
+        });
+      }
+
+      lastDepth = currentDepth;
+    }
+
+    function startKlineSocket(interval) {
+      if (window.wsKline) window.wsKline.close();
+      window.wsKline = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@kline_${interval}`);
+      window.wsKline.onmessage = e => {
+        const k = JSON.parse(e.data).k;
+        const delta = deltaMap[k.c] || 0;
+        candles.push({ o: +k.o, h: +k.h, l: +k.l, c: +k.c, delta });
+        if (candles.length > 150) candles.shift();
+        render();
+      };
+    }
+
+    startKlineSocket(timeframeSelector.value);
+    timeframeSelector.onchange = () => {
+      candles = [];
+      startKlineSocket(timeframeSelector.value);
+    };
+
+    const wsDepth = new WebSocket('wss://fstream.binance.com/ws/btcusdt@depth20@100ms');
+    wsDepth.onmessage = e => {
+      const d = JSON.parse(e.data);
+      detectIcebergAndRetirada({ bids: d.bids, asks: d.asks });
+      updateDOMOverlay(d.bids, d.asks);
+      render();
+    };
+
+    const wsAgg = new WebSocket('wss://fstream.binance.com/ws/btcusdt@aggTrade');
+    wsAgg.onmessage = e => {
+      const d = JSON.parse(e.data);
+      price = +d.p;
+      const qty = +d.q;
+      const key = price.toFixed(2);
+      deltaMap[key] = (deltaMap[key] || 0) + (d.m ? -qty : qty);
+      render();
+    };
+  </script>
 </body>
 </html>
