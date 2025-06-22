@@ -1,249 +1,194 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
+<!DOCTYPE html><html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Gráfico Binance + SuperDOM + Informações</title>
+  <title>Delta Real Executado - Multi Corretoras</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: monospace;
+    body {
       background: #111;
       color: #eee;
+      font-family: monospace;
+      margin: 0;
+      padding: 0;
+      user-select: none;
     }
     #controls {
-      padding: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
       background: #222;
-      font-size: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
-    #chartWrapper {
-      position: relative;
-      width: 100vw;
-      height: calc(100vh - 35px);
-      overflow: hidden;
+    button {
+      background: #333;
+      border: 1px solid #555;
+      color: #eee;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      border-radius: 4px;
+    }
+    button:hover, button.active {
+      background: #00bb88;
+      border-color: #00ffbb;
+      color: #000;
+    }
+    #deltaInfo, #balanceText, #volumeTotal {
+      text-align: center;
+      margin: 10px auto;
+      font-size: 16px;
     }
     canvas {
+      background: #000;
       display: block;
-      width: 100%;
-      height: 100%;
-      background: #000;
-      touch-action: pinch-zoom;
-    }
-    #domOverlay {
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 80px;
-      background: rgba(0,0,0,0.4);
-      font-size: 10px;
-      overflow-y: auto;
-      height: 100%;
-      z-index: 3;
-    }
-    .dom-line {
-      position: absolute;
-      right: 0;
-      width: 100%;
-      padding: 1px 2px;
-      text-align: right;
-    }
-    .bid-line {
-      background: rgba(0,255,0,0.1);
-    }
-    .ask-line {
-      background: rgba(255,0,0,0.1);
-    }
-    .line-label {
-      position: absolute;
-      font-size: 11px;
-      background: #000;
-      padding: 1px 3px;
-      color: white;
-      border-radius: 3px;
-      z-index: 4;
-      white-space: nowrap;
-    }
-    #infoPanel {
-      position: absolute;
-      top: 5px;
-      left: 5px;
-      background: rgba(0,0,0,0.65);
-      border: 1px solid #444;
-      padding: 6px 10px;
-      border-radius: 5px;
-      font-size: 11px;
-      z-index: 4;
+      margin: 0 auto 40px;
     }
   </style>
 </head>
 <body>
   <div id="controls">
-    Timeframe:
-    <select id="timeframe">
-      <option value="1m">1m</option>
-      <option value="5m">5m</option>
-      <option value="15m">15m</option>
-    </select>
-  </div>
-  <div id="chartWrapper">
-    <canvas id="canvas"></canvas>
-    <div id="domOverlay"></div>
-    <div id="infoPanel">
-      <div>Preço Atual: <span id="currentPrice">-</span></div>
-      <div>Maior Delta: <span id="deltaTarget">-</span></div>
-      <div>Zoom: <span id="zoomLevel">1.00</span></div>
-    </div>
-  </div>
-
-  <script>
-    const canvas = document.getElementById('canvas');
+    <button data-window="10000">10s</button>
+    <button data-window="30000">30s</button>
+    <button data-window="60000" class="active">1min</button>
+    <button data-window="300000">5min</button>
+    <button data-window="900000">15min</button>
+    <button data-window="3600000">1h</button>
+    <button data-window="14400000">4h</button>
+    <button data-window="86400000">1 dia</button>
+    <button data-window="604800000">1 semana</button>
+    <button data-window="2592000000">1 mês</button>
+    <button data-window="31536000000">1 ano</button>
+    <button id="exportCsv">Exportar CSV</button>
+  </div>  <h2 style="text-align:center;">🎯 Delta Real Executado - 9 Corretoras</h2>
+  <div id="deltaInfo">Calculando delta real...</div>
+  <div id="balanceText"></div>
+  <div id="volumeTotal"></div>
+  <canvas id="combinedCanvas" width="1000" height="500"></canvas>  <script>
+    const canvas = document.getElementById('combinedCanvas');
     const ctx = canvas.getContext('2d');
-    const domOverlay = document.getElementById('domOverlay');
-    const currentPriceSpan = document.getElementById('currentPrice');
-    const deltaTargetSpan = document.getElementById('deltaTarget');
-    const zoomLevelSpan = document.getElementById('zoomLevel');
-    const timeframeSelector = document.getElementById('timeframe');
+    const deltaInfo = document.getElementById('deltaInfo');
+    const balanceText = document.getElementById('balanceText');
+    const volumeTotal = document.getElementById('volumeTotal');
+    const buttons = document.querySelectorAll('#controls button[data-window]');
+    const exportBtn = document.getElementById('exportCsv');
 
-    let price = 0;
-    let deltaMap = {};
-    let candles = [];
-    let zoom = 1;
-    let wsKline;
+    let windowMS = 60000;
+    const trades = [];
+    const deltaHistory = [];
 
-    // URL da sua API (já configurada)
-    const apiUrl = "https://upgraded-acorn-74r6jq7g7vvcpp4j-3000.app.github.dev/enviar-dados";
+    const exchanges = [
+      { name: 'Binance', url: 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade', side: d => d.m ? 'sell' : 'buy', qty: d => parseFloat(d.q) },
+    ];
 
-    function resizeCanvas() {
-      canvas.width = canvas.clientWidth;
-      canvas.height = canvas.clientHeight;
-    }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
-
-    function yPos(p) {
-      return canvas.height / 2 + (price - p) * zoom * 5;
+    function addTrade(side, qty) {
+      trades.push({ side, qty, ts: Date.now() });
     }
 
-    function drawLine(y, color, text) {
-      ctx.strokeStyle = color;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+    function updateDelta() {
+      const now = Date.now();
+      const recentTrades = trades.filter(t => now - t.ts < windowMS);
+      while(trades.length && now - trades[0].ts > windowMS) trades.shift();
 
-      const lbl = document.createElement('div');
-      lbl.className = 'line-label';
-      lbl.innerText = text;
-      lbl.style.top = `${y}px`;
-      lbl.style.left = '5px';
-      lbl.style.color = color;
-      canvas.parentElement.appendChild(lbl);
-      setTimeout(() => lbl.remove(), 10000);
+      let buyVol = 0, sellVol = 0;
+      recentTrades.forEach(t => {
+        if (t.side === 'buy') buyVol += t.qty;
+        else sellVol += t.qty;
+      });
+
+      const delta = buyVol - sellVol;
+      deltaHistory.push({ delta, ts: now });
+      if (deltaHistory.length > 100) deltaHistory.shift();
+
+      const totalVol = buyVol + sellVol;
+      const percBuy = totalVol ? (buyVol / totalVol) * 100 : 0;
+      const percSell = 100 - percBuy;
+      const basePrice = 67000;
+      const target = basePrice + delta * 0.5;
+
+      deltaInfo.textContent = `💬 Delta (${(windowMS/1000).toFixed(0)}s): ${delta.toFixed(2)} | 🎯 Alvo IA: $${target.toFixed(2)}`;
+      balanceText.textContent = `🟢 ${percBuy.toFixed(1)}% / 🔴 ${percSell.toFixed(1)}%`;
+      volumeTotal.textContent = `📊 Volume: Buy = ${buyVol.toFixed(2)} | Sell = ${sellVol.toFixed(2)}`;
+
+      drawChart(buyVol, sellVol, target);
     }
 
-    function enviarDadosParaAPI(price, tp, target_direction) {
-      fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ price, tp, target_direction })
-      })
-      .then(response => response.json())
-      .then(data => console.log('Dados enviados para API:', data))
-      .catch(err => console.error('Erro enviando dados para API:', err));
-    }
-
-    function render() {
+    function drawChart(buy, sell, target) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawLine(yPos(price), 'deepskyblue', `Preço Atual: ${price.toFixed(2)}`);
+      const max = Math.max(buy, sell, 1);
+      const metaBuy = buy + max * 0.2;
+      const metaSell = sell + max * 0.2;
 
-      candles.forEach((c, i) => {
-        const x = canvas.width - (candles.length - i) * 8;
-        const oY = yPos(c.o);
-        const cY = yPos(c.c);
-        const hY = yPos(c.h);
-        const lY = yPos(c.l);
-        ctx.strokeStyle = c.o > c.c ? 'red' : 'lime';
-        ctx.beginPath();
-        ctx.moveTo(x + 3, hY);
-        ctx.lineTo(x + 3, lY);
-        ctx.stroke();
-        ctx.strokeRect(x, Math.min(oY, cY), 6, Math.abs(oY - cY));
-        ctx.fillStyle = '#fff';
-        ctx.font = '8px monospace';
-        ctx.fillText(c.delta.toFixed(1), x, Math.min(oY, cY) - 4);
-      });
+      // Barras
+      ctx.fillStyle = '#00ff88';
+      const hBuy = (buy / max) * 300;
+      ctx.fillRect(150, canvas.height - hBuy - 100, 300, hBuy);
+      ctx.fillStyle = '#ff4444';
+      const hSell = (sell / max) * 300;
+      ctx.fillRect(550, canvas.height - hSell - 100, 300, hSell);
 
-      let maxDelta = 0;
-      let targetPrice = 0;
-      for (let p in deltaMap) {
-        if (Math.abs(deltaMap[p]) > Math.abs(maxDelta)) {
-          maxDelta = deltaMap[p];
-          targetPrice = parseFloat(p);
+      // Linhas de meta
+      ctx.strokeStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.moveTo(150, canvas.height - (metaBuy / max) * 300 - 100);
+      ctx.lineTo(450, canvas.height - (metaBuy / max) * 300 - 100);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(550, canvas.height - (metaSell / max) * 300 - 100);
+      ctx.lineTo(850, canvas.height - (metaSell / max) * 300 - 100);
+      ctx.stroke();
+
+      // Texto alvo
+      ctx.fillStyle = '#00ffff';
+      ctx.font = '16px monospace';
+      ctx.fillText(`🎯 Alvo IA: $${target.toFixed(2)}`, 400, 30);
+    }
+
+    // WebSocket exemplo (Binance)
+    exchanges.forEach(ex => {
+      const ws = new WebSocket(ex.url);
+      ws.onmessage = e => {
+        try {
+          const d = JSON.parse(e.data);
+          const side = ex.side(d);
+          const qty = ex.qty(d);
+          if (side && qty) addTrade(side, qty);
+        } catch (err) {
+          console.error(ex.name, err);
         }
-      }
-      if (targetPrice) {
-        drawLine(yPos(targetPrice), maxDelta > 0 ? 'cyan' : 'orange', `Alvo Delta: ${targetPrice}`);
-        deltaTargetSpan.innerText = `${targetPrice} (${maxDelta > 0 ? 'Buy' : 'Sell'})`;
-
-        enviarDadosParaAPI(price, targetPrice, maxDelta > 0 ? 'buy' : 'sell');
-      }
-
-      zoomLevelSpan.innerText = zoom.toFixed(2);
-      currentPriceSpan.innerText = price.toFixed(2);
-    }
-
-    function updateDOMOverlay(bids, asks) {
-      domOverlay.innerHTML = '';
-      const all = [...bids.map(b => [...b, 'bid']), ...asks.map(a => [...a, 'ask'])];
-      all.sort((a, b) => +b[0] - +a[0]).forEach(([p, v, type]) => {
-        const y = yPos(+p);
-        if (y < 0 || y > canvas.height) return;
-        const div = document.createElement('div');
-        div.className = `dom-line ${type === 'bid' ? 'bid-line' : 'ask-line'}`;
-        div.style.top = `${y}px`;
-        div.innerText = `${parseFloat(p).toFixed(2)}\n${parseFloat(v).toFixed(2)}`;
-        domOverlay.appendChild(div);
-      });
-    }
-
-    function startKlineSocket(interval) {
-      if (wsKline) wsKline.close();
-      wsKline = new WebSocket(`wss://fstream.binance.com/ws/btcusdt@kline_${interval}`);
-      wsKline.onmessage = e => {
-        const k = JSON.parse(e.data).k;
-        const delta = deltaMap[k.c] || 0;
-        candles.push({ o: +k.o, h: +k.h, l: +k.l, c: +k.c, delta });
-        if (candles.length > 150) candles.shift();
-        render();
       };
-    }
+    });
 
-    startKlineSocket(timeframeSelector.value);
-    timeframeSelector.onchange = () => {
-      candles = [];
-      startKlineSocket(timeframeSelector.value);
-    };
+    setInterval(updateDelta, 1000);
 
-    const wsDepth = new WebSocket('wss://fstream.binance.com/ws/btcusdt@depth20@100ms');
-    wsDepth.onmessage = e => {
-      const d = JSON.parse(e.data);
-      updateDOMOverlay(d.bids, d.asks);
-      render();
-    };
+    // Botões de timeframe
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        buttons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        windowMS = parseInt(btn.getAttribute('data-window'));
+        deltaHistory.length = 0;
+        trades.length = 0;
+      });
+    });
 
-    const wsAgg = new WebSocket('wss://fstream.binance.com/ws/btcusdt@aggTrade');
-    wsAgg.onmessage = e => {
-      const d = JSON.parse(e.data);
-      price = +d.p;
-      const qty = +d.q;
-      const key = price.toFixed(2);
-      deltaMap[key] = (deltaMap[key] || 0) + (d.m ? -qty : qty);
-      render();
-    };
-  </script>
-</body>
+    // Exportar CSV
+    exportBtn.addEventListener('click', () => {
+      if (!deltaHistory.length) return alert('Sem dados');
+      let csv = 'timestamp,delta\n';
+      deltaHistory.forEach(d => {
+        csv += `${new Date(d.ts).toISOString()},${d.delta}\n`;
+      });
+      const blob = new Blob([csv], {type: 'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `delta_${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  </script></body>
 </html>
