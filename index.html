@@ -1,194 +1,246 @@
-<!DOCTYPE html><html lang="pt-BR">
+<!DOCTYPE html>
+<html lang="pt-BR">
 <head>
-  <meta charset="UTF-8" />
-  <title>Delta Real Executado - Multi Corretoras</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body {
-      background: #111;
-      color: #eee;
-      font-family: monospace;
-      margin: 0;
-      padding: 0;
-      user-select: none;
-    }
-    #controls {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 6px;
-      padding: 10px;
-      background: #222;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    button {
-      background: #333;
-      border: 1px solid #555;
-      color: #eee;
-      padding: 6px 12px;
-      cursor: pointer;
-      font-size: 13px;
-      border-radius: 4px;
-    }
-    button:hover, button.active {
-      background: #00bb88;
-      border-color: #00ffbb;
-      color: #000;
-    }
-    #deltaInfo, #balanceText, #volumeTotal {
-      text-align: center;
-      margin: 10px auto;
-      font-size: 16px;
-    }
-    canvas {
-      background: #000;
-      display: block;
-      margin: 0 auto 40px;
-    }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sentimento Agregado BTC/USD - 60 Corretoras</title>
+<style>
+  body { background: #121212; color: #eee; font-family: Arial, sans-serif; margin:0; padding:20px; }
+  h1 { text-align:center; }
+  #status { margin: 10px 0; }
+  #sentiment { font-size: 1.5rem; font-weight: bold; margin-top: 20px; text-align:center; }
+  #connections { margin-top: 10px; font-size: 0.9rem; }
+  .connected { color: #0f0; }
+  .disconnected { color: #f33; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+  th, td { padding: 6px 8px; border: 1px solid #333; text-align: center; }
+  th { background: #222; }
+</style>
 </head>
 <body>
-  <div id="controls">
-    <button data-window="10000">10s</button>
-    <button data-window="30000">30s</button>
-    <button data-window="60000" class="active">1min</button>
-    <button data-window="300000">5min</button>
-    <button data-window="900000">15min</button>
-    <button data-window="3600000">1h</button>
-    <button data-window="14400000">4h</button>
-    <button data-window="86400000">1 dia</button>
-    <button data-window="604800000">1 semana</button>
-    <button data-window="2592000000">1 mês</button>
-    <button data-window="31536000000">1 ano</button>
-    <button id="exportCsv">Exportar CSV</button>
-  </div>  <h2 style="text-align:center;">🎯 Delta Real Executado - 9 Corretoras</h2>
-  <div id="deltaInfo">Calculando delta real...</div>
-  <div id="balanceText"></div>
-  <div id="volumeTotal"></div>
-  <canvas id="combinedCanvas" width="1000" height="500"></canvas>  <script>
-    const canvas = document.getElementById('combinedCanvas');
-    const ctx = canvas.getContext('2d');
-    const deltaInfo = document.getElementById('deltaInfo');
-    const balanceText = document.getElementById('balanceText');
-    const volumeTotal = document.getElementById('volumeTotal');
-    const buttons = document.querySelectorAll('#controls button[data-window]');
-    const exportBtn = document.getElementById('exportCsv');
+  <h1>Sentimento Agregado BTC/USD - 60 Corretoras</h1>
+  <div id="status">Conectando...</div>
+  <div id="sentiment">Sentimento: Carregando...</div>
+  <div id="connections"></div>
 
-    let windowMS = 60000;
-    const trades = [];
-    const deltaHistory = [];
+<script>
+const exchanges = [
+  { name:"Binance", ws:"wss://stream.binance.com:9443/ws/btcusdt@depth", sub:null },
+  { name:"Kraken", ws:"wss://ws.kraken.com", sub: JSON.stringify({event:"subscribe", pair:["XBT/USD"], subscription:{name:"book"}}) },
+  { name:"Bitstamp", ws:"wss://ws.bitstamp.net", sub: JSON.stringify({event:"bts:subscribe", data:{channel:"order_book_btcusd"}}) },
+  { name:"Coinbase Pro", ws:"wss://ws-feed.pro.coinbase.com", sub: JSON.stringify({type:"subscribe", product_ids:["BTC-USD"], channels:["level2"]}) },
+  { name:"Huobi", ws:"wss://api.huobi.pro/ws", sub: JSON.stringify({sub:"market.btcusdt.depth.step0", id:"id1"}) },
+  { name:"OKX", ws:"wss://ws.okx.com:8443/ws/v5/public", sub: JSON.stringify({op:"subscribe", args:[{channel:"books", instId:"BTC-USDT"}]}) },
+  { name:"Bybit", ws:"wss://stream.bybit.com/realtime", sub: JSON.stringify({op:"subscribe", args:["orderBookL2_25.BTCUSD"]}) },
+  { name:"Gate.io", ws:"wss://ws.gate.io/v3/", sub: JSON.stringify({id:1, method:"depth.subscribe", params:["BTC_USDT", "100ms", "0"]}) },
+  { name:"KuCoin", ws:"wss://ws-api-spot.kucoin.com/", sub: JSON.stringify({id:1, type:"subscribe", topic:"/market/level2:B-BTC-USDT"}) },
+  { name:"FTX", ws:"wss://ftx.com/ws/", sub: JSON.stringify({op:"subscribe", channel:"orderbook", market:"BTC/USD"}) },
+  { name:"Bitfinex", ws:"wss://api-pub.bitfinex.com/ws/2", sub: JSON.stringify({event:"subscribe", channel:"book", symbol:"tBTCUSD", prec:"P0", freq:"F0"}) },
+  { name:"Poloniex", ws:"wss://api.poloniex.com", sub: JSON.stringify({command:"subscribe", channel:"BTC_USDT"}) },
+  { name:"Deribit", ws:"wss://www.deribit.com/ws/api/v2", sub: JSON.stringify({jsonrpc:"2.0", method:"public/subscribe", params:{channels:["book.BTC-PERPETUAL.none.100ms"]}, id:1}) },
+  { name:"HitBTC", ws:"wss://api.hitbtc.com/api/2/ws", sub: JSON.stringify({method:"subscribeOrderbook", params:{symbol:"BTCUSD"}, id:123}) },
+  { name:"BitMEX", ws:"wss://www.bitmex.com/realtime", sub: JSON.stringify({op:"subscribe", args:["orderBookL2:XBTUSD"]}) },
+  { name:"Crypto.com Exchange", ws:"wss://stream.crypto.com/v2/market", sub: JSON.stringify({method:"subscribe", params:{channels:["book.BTCUSD.100ms"]}}) },
+  { name:"CEX.IO", ws:"wss://ws.cex.io/ws", sub: JSON.stringify({e:"order-book-subscribe", data:{pair:["BTC","USD"], subscribe:true}}) },
+  { name:"CoinEx", ws:"wss://socket.coinex.com/", sub: JSON.stringify({method:"depth.subscribe", params:["BTCUSDT", 100, "0"]}) },
+  { name:"WazirX", ws:"wss://stream.wazirx.com/stream", sub: JSON.stringify({event:"subscribe", streams:["btcusdt@depth"]}) },
+  { name:"LBank", ws:"wss://www.lbank.info/ws/V2/", sub: JSON.stringify({action:"subscribe", subscribe:"depth.BTCUSDT"}) },
+  { name:"MEXC Global", ws:"wss://wbs.mexc.com/raw/ws", sub: JSON.stringify({method:"SUBSCRIBE", params:["spot@public.bookTicker.ticker.BTCUSDT"]}) },
+  { name:"ZB.com", ws:"wss://api.zb.land/websocket", sub: JSON.stringify({event:"addChannel", channel:"btcusdt_depth"}) },
+  { name:"Bitrue", ws:"wss://ws.bitrue.com/kline-api/ws", sub: JSON.stringify({event:"sub", params:{channel:"market_btcusdt_depth_step0"}}) },
+  { name:"BitForex", ws:"wss://www.bitforex.com/mkapi/swap/v1/ticker", sub: JSON.stringify({op:"subscribe", args:["btcusdt_depth"]}) },
+  { name:"CoinBene", ws:"wss://ws.coinbene.com/kline-api/ws", sub: JSON.stringify({event:"sub", params:{channel:"btcusdt_depth"}}) },
+  { name:"BKEX", ws:"wss://www.bkex.com/openapi/quote/ws/v1", sub: JSON.stringify({event:"sub", params:{channel:"btcusdt_depth"}}) },
+  { name:"BigONE", ws:"wss://big.one/api/v3/ws", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"DigiFinex", ws:"wss://openapi.digifinex.com/ws/v1/", sub: JSON.stringify({method:"subscribe", params:{channel:"btcusdt_depth"}}) },
+  { name:"P2B", ws:"wss://ws.p2pb2b.io/websocket", sub: JSON.stringify({method:"subscribe", params:{channel:"btcusdt_depth"}}) },
+  { name:"VinDAX", ws:"wss://vindax.com/websocket", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Bilaxy", ws:"wss://ws.bilaxy.com/websocket", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"LATOKEN", ws:"wss://api.latoken.com/v2/ws", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"BW.com", ws:"wss://kline.bw.com/websocket", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Bitget", ws:"wss://ws.bitget.com/spot/v1/stream", sub: JSON.stringify({op:"subscribe", args:["spot/depth50:BTCUSDT"]}) },
+  { name:"Hoo", ws:"wss://api.hoolgd.com/ws/v1", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"WhiteBIT", ws:"wss://api.whitebit.com/ws", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"EXMO", ws:"wss://ws-api.exmo.com/v1/public", sub: JSON.stringify({method:"subscribe", params:{channel:"btcusdt_depth"}}) },
+  { name:"Indodax", ws:"wss://kline.indodax.com/ws", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Bitpanda Pro", ws:"wss://streams.exchange.bitpanda.com", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Bitso", ws:"wss://ws.bitso.com", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Buda", ws:"wss://www.buda.com/api/v2/ws", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"BitBay", ws:"wss://api.bitbay.net/websocket", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Independent Reserve", ws:"wss://api.independentreserve.com/WebSocket", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"itBit", ws:"wss://api.itbit.com/ws", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) },
+  { name:"Coinfloor", ws:"wss://websockets.coinfloor.co.uk/", sub: JSON.stringify({event:"subscribe", channel:"btcusdt_depth"}) }
+];
 
-    const exchanges = [
-      { name: 'Binance', url: 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade', side: d => d.m ? 'sell' : 'buy', qty: d => parseFloat(d.q) },
-    ];
+const sockets = [];
+const aggregatedBids = {};
+const aggregatedAsks = {};
+let connectedCount = 0;
 
-    function addTrade(side, qty) {
-      trades.push({ side, qty, ts: Date.now() });
+const statusEl = document.getElementById("status");
+const sentimentEl = document.getElementById("sentiment");
+const connectionsEl = document.getElementById("connections");
+
+function connect(exchange) {
+  const socket = new WebSocket(exchange.ws);
+
+  const connDiv = document.createElement("div");
+  connDiv.textContent = `${exchange.name}: Conectando...`;
+  connDiv.className = "disconnected";
+  connectionsEl.appendChild(connDiv);
+
+  socket.onopen = () => {
+    connDiv.textContent = `${exchange.name}: Conectado`;
+    connDiv.className = "connected";
+    connectedCount++;
+    statusEl.textContent = `Conectado a ${connectedCount} / ${exchanges.length} exchanges`;
+
+    if(exchange.sub) {
+      try { socket.send(exchange.sub); } catch(e) { console.warn(`Erro subscribe ${exchange.name}`, e); }
     }
+  };
 
-    function updateDelta() {
-      const now = Date.now();
-      const recentTrades = trades.filter(t => now - t.ts < windowMS);
-      while(trades.length && now - trades[0].ts > windowMS) trades.shift();
+  socket.onerror = () => {
+    connDiv.textContent = `${exchange.name}: Erro na conexão`;
+    connDiv.className = "disconnected";
+  };
 
-      let buyVol = 0, sellVol = 0;
-      recentTrades.forEach(t => {
-        if (t.side === 'buy') buyVol += t.qty;
-        else sellVol += t.qty;
-      });
+  socket.onclose = () => {
+    connDiv.textContent = `${exchange.name}: Desconectado - reconectando em 5s...`;
+    connDiv.className = "disconnected";
+    connectedCount--;
+    statusEl.textContent = `Conectado a ${connectedCount} / ${exchanges.length} exchanges`;
+    setTimeout(() => connect(exchange), 5000);
+  };
 
-      const delta = buyVol - sellVol;
-      deltaHistory.push({ delta, ts: now });
-      if (deltaHistory.length > 100) deltaHistory.shift();
-
-      const totalVol = buyVol + sellVol;
-      const percBuy = totalVol ? (buyVol / totalVol) * 100 : 0;
-      const percSell = 100 - percBuy;
-      const basePrice = 67000;
-      const target = basePrice + delta * 0.5;
-
-      deltaInfo.textContent = `💬 Delta (${(windowMS/1000).toFixed(0)}s): ${delta.toFixed(2)} | 🎯 Alvo IA: $${target.toFixed(2)}`;
-      balanceText.textContent = `🟢 ${percBuy.toFixed(1)}% / 🔴 ${percSell.toFixed(1)}%`;
-      volumeTotal.textContent = `📊 Volume: Buy = ${buyVol.toFixed(2)} | Sell = ${sellVol.toFixed(2)}`;
-
-      drawChart(buyVol, sellVol, target);
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      processData(exchange.name, data);
+    } catch(err) {
+      console.warn(`${exchange.name} parse error`, err);
     }
+  };
 
-    function drawChart(buy, sell, target) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const max = Math.max(buy, sell, 1);
-      const metaBuy = buy + max * 0.2;
-      const metaSell = sell + max * 0.2;
+  sockets.push(socket);
+}
 
-      // Barras
-      ctx.fillStyle = '#00ff88';
-      const hBuy = (buy / max) * 300;
-      ctx.fillRect(150, canvas.height - hBuy - 100, 300, hBuy);
-      ctx.fillStyle = '#ff4444';
-      const hSell = (sell / max) * 300;
-      ctx.fillRect(550, canvas.height - hSell - 100, 300, hSell);
+function processData(exchangeName, data) {
+  let bids = [];
+  let asks = [];
 
-      // Linhas de meta
-      ctx.strokeStyle = '#ffff00';
-      ctx.beginPath();
-      ctx.moveTo(150, canvas.height - (metaBuy / max) * 300 - 100);
-      ctx.lineTo(450, canvas.height - (metaBuy / max) * 300 - 100);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(550, canvas.height - (metaSell / max) * 300 - 100);
-      ctx.lineTo(850, canvas.height - (metaSell / max) * 300 - 100);
-      ctx.stroke();
-
-      // Texto alvo
-      ctx.fillStyle = '#00ffff';
-      ctx.font = '16px monospace';
-      ctx.fillText(`🎯 Alvo IA: $${target.toFixed(2)}`, 400, 30);
-    }
-
-    // WebSocket exemplo (Binance)
-    exchanges.forEach(ex => {
-      const ws = new WebSocket(ex.url);
-      ws.onmessage = e => {
-        try {
-          const d = JSON.parse(e.data);
-          const side = ex.side(d);
-          const qty = ex.qty(d);
-          if (side && qty) addTrade(side, qty);
-        } catch (err) {
-          console.error(ex.name, err);
+  try {
+    switch(exchangeName) {
+      case "Binance":
+        if(data.bids && data.asks) { bids = data.bids; asks = data.asks; }
+        else if(data.depthUpdate) {
+          bids = data.bids || [];
+          asks = data.asks || [];
         }
-      };
-    });
+        break;
 
-    setInterval(updateDelta, 1000);
+      case "Kraken":
+        if(data.b && data.a) { bids = data.b; asks = data.a; }
+        else if(data[1] && data[1].b && data[1].a) {
+          bids = data[1].b; asks = data[1].a;
+        }
+        break;
 
-    // Botões de timeframe
-    buttons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        buttons.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        windowMS = parseInt(btn.getAttribute('data-window'));
-        deltaHistory.length = 0;
-        trades.length = 0;
-      });
-    });
+      case "Bitstamp":
+        if(data.data) {
+          bids = data.data.bids || [];
+          asks = data.data.asks || [];
+        }
+        break;
 
-    // Exportar CSV
-    exportBtn.addEventListener('click', () => {
-      if (!deltaHistory.length) return alert('Sem dados');
-      let csv = 'timestamp,delta\n';
-      deltaHistory.forEach(d => {
-        csv += `${new Date(d.ts).toISOString()},${d.delta}\n`;
-      });
-      const blob = new Blob([csv], {type: 'text/csv'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `delta_${Date.now()}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-  </script></body>
+      case "Coinbase Pro":
+        if(data.bids && data.asks) { bids = data.bids; asks = data.asks; }
+        break;
+
+      case "Huobi":
+        if(data.tick) {
+          bids = data.tick.bids || [];
+          asks = data.tick.asks || [];
+        }
+        break;
+
+      case "OKX":
+        if(data.data && data.data.length) {
+          bids = data.data[0].bids || [];
+          asks = data.data[0].asks || [];
+        }
+        break;
+
+      case "Bybit":
+        if(data.data && data.data.length) {
+          bids = data.data.filter(d => d.side === "Buy").map(d => [parseFloat(d.price), parseFloat(d.size)]);
+          asks = data.data.filter(d => d.side === "Sell").map(d => [parseFloat(d.price), parseFloat(d.size)]);
+        }
+        break;
+
+      default:
+        if(data.tick && data.tick.bids && data.tick.asks) {
+          bids = data.tick.bids;
+          asks = data.tick.asks;
+        } else if(data.bids && data.asks) {
+          bids = data.bids;
+          asks = data.asks;
+        }
+    }
+  } catch(e) {
+    console.warn(`${exchangeName} erro processar bids/asks`, e);
+  }
+
+  aggregateOrders(bids, asks);
+}
+
+function aggregateOrders(bids, asks) {
+  bids.forEach(([price, size]) => {
+    const p = parseFloat(price);
+    const s = parseFloat(size);
+    if(!isNaN(p) && !isNaN(s)) {
+      aggregatedBids[p] = (aggregatedBids[p] || 0) + s;
+    }
+  });
+
+  asks.forEach(([price, size]) => {
+    const p = parseFloat(price);
+    const s = parseFloat(size);
+    if(!isNaN(p) && !isNaN(s)) {
+      aggregatedAsks[p] = (aggregatedAsks[p] || 0) + s;
+    }
+  });
+
+  updateSentiment();
+}
+
+function updateSentiment() {
+  const totalBid = Object.values(aggregatedBids).reduce((a,b) => a + b, 0);
+  const totalAsk = Object.values(aggregatedAsks).reduce((a,b) => a + b, 0);
+  const total = totalBid + totalAsk;
+  if(total === 0) {
+    sentimentEl.textContent = "Sentimento: sem dados";
+    return;
+  }
+  const delta = totalBid - totalAsk;
+  const pct = (delta / total) * 100;
+
+  if(pct > 0) {
+    sentimentEl.textContent = `Sentimento: Compra majoritária (${pct.toFixed(2)}%)`;
+    sentimentEl.style.color = "#0f0";
+  } else if(pct < 0) {
+    sentimentEl.textContent = `Sentimento: Venda majoritária (${pct.toFixed(2)}%)`;
+    sentimentEl.style.color = "#f33";
+  } else {
+    sentimentEl.textContent = `Sentimento: Neutro (0%)`;
+    sentimentEl.style.color = "#ccc";
+  }
+
+  const now = new Date().toLocaleTimeString();
+  statusEl.innerHTML = `Conectado a ${connectedCount} / ${exchanges.length} exchanges | Última atualização: <strong>${now}</strong>`;
+}
+
+exchanges.forEach(connect);
+</script>
+</body>
 </html>
